@@ -111,7 +111,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             logger.info(f"Order {order_id} forwarded to group {target_group}")
         except Exception as e:
-            logger.error(f"Failed to forward order to group: {e}")
+            logger.error(f"Failed to forward order {order_id} to group {target_group}: {e}")
             # Order is still saved in database even if forwarding fails
     else:
         logger.debug(f"Message from {message.from_user.id} is not a valid order")
