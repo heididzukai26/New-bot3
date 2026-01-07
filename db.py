@@ -1,7 +1,11 @@
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
+
+
+DB_LOCK = threading.Lock()
 
 
 def get_connection() -> sqlite3.Connection:
@@ -13,13 +17,14 @@ def get_connection() -> sqlite3.Connection:
 
 @contextmanager
 def db_cursor():
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        yield cur
-        conn.commit()
-    finally:
-        conn.close()
+    with DB_LOCK:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            yield cur
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def init_db():
