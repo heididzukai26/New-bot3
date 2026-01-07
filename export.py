@@ -39,7 +39,7 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE, admi
     if not user or not is_admin(user.id, admin_ids):
         return
     wb = build_workbook()
-    with BytesIO() as buffer:
-        wb.save(buffer)
-        buffer.seek(0)
-        await update.effective_message.reply_document(document=buffer, filename="orders.xlsx")
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    await update.effective_message.reply_document(document=buffer.getvalue(), filename="orders.xlsx")

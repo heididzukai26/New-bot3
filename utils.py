@@ -19,7 +19,12 @@ def extract_email(text: str) -> Optional[str]:
 
 
 def extract_numbers(text: str) -> list[int]:
-    return [int(n.replace(",", "")) for n in NUMBER_REGEX.findall(text)]
+    numbers: list[int] = []
+    for raw in NUMBER_REGEX.findall(text):
+        cleaned = raw.replace(",", "")
+        if cleaned.isdigit():
+            numbers.append(int(cleaned))
+    return numbers
 
 
 def largest_number(text: str) -> Optional[int]:
@@ -51,6 +56,9 @@ def parse_price(text: str) -> Optional[tuple[float, str]]:
     match = PRICE_REGEX.search(text)
     if not match:
         return None
-    amount = float(match.group(1).replace(",", ""))
+    cleaned = match.group(1).replace(",", "")
+    if not cleaned.isdigit():
+        return None
+    amount = float(cleaned)
     currency = "USD" if match.group(2) == "$" else "TM"
     return amount, currency
