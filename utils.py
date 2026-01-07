@@ -10,12 +10,19 @@ PRICE_REGEX = re.compile(r"((?:\d{1,3}(?:,\d{3})+|\d+))(\$|tm)", re.IGNORECASE)
 
 
 def contains_email(text: str) -> bool:
-    return bool(EMAIL_REGEX.search(text))
+    return extract_email(text) is not None
 
 
 def extract_email(text: str) -> Optional[str]:
+    if not text:
+        return None
     match = EMAIL_REGEX.search(text)
-    return match.group(0) if match else None
+    if not match:
+        return None
+    email = match.group(0)
+    if ".." in email:
+        return None
+    return email
 
 
 def extract_numbers(text: str) -> list[int]:

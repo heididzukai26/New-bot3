@@ -4,7 +4,6 @@ import os
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
-    AIORateLimiter,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -79,9 +78,7 @@ def main():
         raise RuntimeError("BOT_TOKEN is required")
 
     admin_ids = load_admin_ids()
-    application = (
-        ApplicationBuilder().token(token).rate_limiter(AIORateLimiter()).build()
-    )
+    application = ApplicationBuilder().token(token).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("addsource", addsource))

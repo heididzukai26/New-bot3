@@ -18,7 +18,7 @@ async def _react_safe(bot, chat_id: int, message_id: int, reaction: str):
     try:
         if hasattr(bot, "set_message_reaction"):
             await bot.set_message_reaction(chat_id=chat_id, message_id=message_id, reaction=reaction)
-    except TelegramError as exc:  # pragma: no cover - best effort
+    except TelegramError as exc:  # pragma: no cover
         logging.warning("Failed to set reaction: %s", exc)
 
 
