@@ -1,73 +1,71 @@
 import re
-from typing import Dict, Iterable, Optional, Tuple
-
-EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:\.\d+)?")
+from typing import Optional
 
 
-def extract_email(text: str) -> Optional[str]:
-    """
-    Return the first email address found anywhere in the text.
-    """
-    match = EMAIL_PATTERN.search(text or "")
-    return match.group(0) if match else None
+EMAIL_REGEX = re.compile(
+    r"^(?!.*\.\.)[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+)
+NUMBER_REGEX = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)")
+PRICE_REGEX = re.compile(r"((?:\d{1,3}(?:,\d{3})+|\d+))(\$|tm)", re.IGNORECASE)
 
 
 def contains_email(text: str) -> bool:
-    """
-    True if any email address appears in the text.
-    """
     return extract_email(text) is not None
 
 
-def cp_amount(text: str) -> Optional[float]:
-    """
-    Largest numeric value found in the text. Returns None if no numbers exist.
-    """
-    numbers = NUMBER_PATTERN.findall(text or "")
-    if not numbers:
+def extract_email(text: str) -> Optional[str]:
+    if not text:
         return None
-    parsed_numbers = [float(num) for num in numbers]
-    return max(parsed_numbers)
-
-
-def _line_items(text: str) -> Tuple[str, ...]:
-    return tuple(line.strip() for line in (text or "").splitlines() if line.strip())
-
-
-def is_order(text: str) -> bool:
-    """
-    Order rule: at least 3 non-empty lines, contains an email and a number.
-    """
-    lines = _line_items(text)
-    return len(lines) >= 3 and contains_email(text) and cp_amount(text) is not None
-
-
-def order_type(text: str) -> Optional[str]:
-    lines = _line_items(text)
-    return lines[0] if lines else None
-
-
-def parse_order(text: str) -> Optional[Dict[str, object]]:
-    if not is_order(text):
+    match = EMAIL_REGEX.search(text)
+    if not match:
         return None
-    return {
-        "type": order_type(text),
-        "email": extract_email(text),
-        "cp_amount": cp_amount(text),
-        "raw": text,
-    }
+    email = match.group(0)
+    if ".." in email:
+        return None
+    return email
 
 
-def route_orders(messages: Iterable[str]) -> Dict[Tuple[str, float], Dict[str, object]]:
-    """
-    Save orders keyed by (type, cp_amount). Last write wins for identical keys.
-    """
-    routed: Dict[Tuple[str, float], Dict[str, object]] = {}
-    for message in messages:
-        order = parse_order(message)
-        if order is None:
-            continue
-        key = (order["type"], order["cp_amount"])
-        routed[key] = order
-    return routed
+def extract_numbers(text: str) -> list[int]:
+    numbers: list[int] = []
+    for raw in NUMBER_REGEX.findall(text):
+        cleaned = raw.replace(",", "")
+        if cleaned.isdigit():
+            numbers.append(int(cleaned))
+    return numbers
+
+
+def largest_number(text: str) -> Optional[int]:
+    numbers = extract_numbers(text)
+    return max(numbers) if numbers else None
+
+
+def parse_order_type(text: str) -> str:
+    lowered = text.lower()
+    if "unsafe" in lowered:
+        return "unsafe"
+    if "safe_fast" in lowered or "safe fast" in lowered or ("safe" in lowered and "fast" in lowered):
+        return "safe_fast"
+    if "safe_slow" in lowered or "safe slow" in lowered or ("safe" in lowered and "slow" in lowered):
+        return "safe_slow"
+    if "safe" in lowered:
+        return "safe_slow"
+    return "fund"
+
+
+def is_order_message(text: str) -> bool:
+    if not text:
+        return False
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return len(lines) >= 3 and contains_email(text) and bool(NUMBER_REGEX.search(text))
+
+
+def parse_price(text: str) -> Optional[tuple[float, str]]:
+    match = PRICE_REGEX.search(text)
+    if not match:
+        return None
+    cleaned = match.group(1).replace(",", "")
+    if not cleaned.isdigit():
+        return None
+    amount = float(cleaned)
+    currency = "USD" if match.group(2) == "$" else "TM"
+    return amount, currency
