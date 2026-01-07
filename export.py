@@ -41,11 +41,7 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE, admi
     if not user or not is_admin(user.id, admin_ids):
         return
     wb = build_workbook()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".xlsx") as tmp:
         wb.save(tmp.name)
-        file_path = tmp.name
-    try:
-        await update.effective_message.reply_document(document=file_path, filename="orders.xlsx")
-    finally:
-        if os.path.exists(file_path):
-            os.unlink(file_path)
+        tmp.seek(0)
+        await update.effective_message.reply_document(document=tmp, filename="orders.xlsx")
