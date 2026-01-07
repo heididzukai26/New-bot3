@@ -1,6 +1,5 @@
 import logging
 import os
-from typing import Set
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -28,7 +27,7 @@ from routing import list_sources_text, register_main, register_source
 from utils import largest_number
 
 
-def load_admin_ids() -> Set[int]:
+def load_admin_ids() -> set[int]:
     ids = os.getenv("ADMIN_IDS", "")
     result = set()
     for part in ids.split(","):

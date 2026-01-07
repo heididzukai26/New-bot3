@@ -43,3 +43,4 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE, admi
     wb.save(buffer)
     buffer.seek(0)
     await update.effective_message.reply_document(document=buffer.getvalue(), filename="orders.xlsx")
+    buffer.close()
