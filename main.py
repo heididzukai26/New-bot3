@@ -1,149 +1,134 @@
-"""
-Main module for the Telegram bot.
-Implements long polling and order processing.
-"""
-
 import logging
+import os
+
+from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, ContextTypes, filters
-
-import config
-import db
-from orders import is_valid_order, parse_order
-from routing import determine_route
-
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
 )
-logger = logging.getLogger(__name__)
+
+import db
+from export import handle_export
+from orders import (
+    handle_cancel_decision,
+    handle_cancel_request,
+    handle_new_order,
+    handle_worker_done,
+    handle_worker_wrong,
+)
+from pricing import handle_invoice, handle_price
+from routing import list_sources_text, register_main, register_source
+from utils import largest_number
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
-    await update.message.reply_text(
-        "Welcome to the Order Bot! 🤖\n\n"
-        "Send me an order message with:\n"
-        "- At least 3 lines\n"
-        "- An email address\n"
-        "- A phone number\n\n"
-        "I'll process and route your order automatically."
-    )
+def load_admin_ids() -> set[int]:
+    ids = os.getenv("ADMIN_IDS", "")
+    result = set()
+    for part in ids.split(","):
+        part = part.strip()
+        if part.isdigit():
+            result.add(int(part))
+    return result
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /help command."""
-    help_text = """
-📋 Order Bot Help
-
-To submit an order, send a message with:
-✓ At least 3 lines of text
-✓ A valid email address
-✓ A phone number
-
-Example:
-```
-I need 5 blue widgets
-Please ship to warehouse A
-Contact: john@example.com
-Phone: +1-555-0123
-```
-
-The bot will automatically detect valid orders and route them to the appropriate worker group.
-"""
-    await update.message.reply_text(help_text)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Send your order details. Please include email and amount.")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle incoming messages and process potential orders.
-    """
-    message = update.message
-    text = message.text
-    
-    if not text:
+async def addsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /addsource <type> <amount> or /addsource main")
         return
-    
-    # Check if message is a valid order
-    if is_valid_order(text):
-        logger.info(f"Valid order detected from user {message.from_user.id}")
-        
-        # Parse order information
-        order_info = parse_order(text)
-        
-        # Determine routing
-        target_group = determine_route(text)
-        
-        # Save order to database
-        order_id = db.save_order(
-            user_id=message.from_user.id,
-            username=message.from_user.username or "Unknown",
-            message_text=text,
-            email=order_info['email'],
-            phone=order_info['phone'],
-            line_count=order_info['line_count'],
-            routed_to=target_group
-        )
-        
-        logger.info(f"Order {order_id} saved and routed to {target_group}")
-        
-        # Confirm to user
-        await message.reply_text(
-            f"✅ Order received and processed!\n\n"
-            f"Order ID: {order_id}\n"
-            f"Email: {order_info['email']}\n"
-            f"Phone: {order_info['phone']}\n"
-            f"Routed to: {target_group}\n\n"
-            f"Your order will be handled by our team shortly."
-        )
-        
-        # Forward to target group
-        try:
-            # Note: This requires the bot to be added to the target group
-            await context.bot.send_message(
-                chat_id=target_group,
-                text=f"📦 New Order #{order_id}\n"
-                     f"From: @{message.from_user.username or 'User'} (ID: {message.from_user.id})\n"
-                     f"Email: {order_info['email']}\n"
-                     f"Phone: {order_info['phone']}\n\n"
-                     f"Order Details:\n{text}"
-            )
-            logger.info(f"Order {order_id} forwarded to group {target_group}")
-        except Exception as e:
-            logger.error(f"Failed to forward order {order_id} to group {target_group}: {e}")
-            # Order is still saved in database even if forwarding fails
-    else:
-        logger.debug(f"Message from {message.from_user.id} is not a valid order")
+    if args[0].lower() == "main":
+        msg = register_main(chat.id)
+        await update.message.reply_text(msg)
+        return
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /addsource <type> <amount>")
+        return
+    order_type = args[0].lower()
+    cp_amount = largest_number(args[1])
+    if cp_amount is None:
+        await update.message.reply_text("Amount missing or invalid.")
+        return
+    msg = register_source(chat.id, order_type, cp_amount)
+    await update.message.reply_text(msg)
 
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors."""
-    logger.error(f"Update {update} caused error {context.error}")
+async def listsources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(list_sources_text())
 
 
 def main():
-    """Main function to start the bot."""
-    # Initialize database
-    logger.info("Initializing database...")
+    load_dotenv()
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    )
     db.init_db()
-    
-    # Create application
-    logger.info("Starting bot...")
-    application = Application.builder().token(config.BOT_TOKEN).build()
-    
-    # Register handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Register error handler
-    application.add_error_handler(error_handler)
-    
-    # Start the bot with long polling
-    logger.info("Bot is running... Press Ctrl+C to stop")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise RuntimeError("BOT_TOKEN is required")
+
+    admin_ids = load_admin_ids()
+    application = ApplicationBuilder().token(token).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("addsource", addsource))
+    application.add_handler(CommandHandler("listsources", listsources))
+    application.add_handler(CommandHandler("invoice", lambda u, c: handle_invoice(u, c, admin_ids)))
+    application.add_handler(CommandHandler("export", lambda u, c: handle_export(u, c, admin_ids)))
+
+    # Worker actions
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & filters.ChatType.GROUPS
+            & filters.REPLY
+            & filters.Regex(r"(?i)^done$"),
+            handle_worker_done,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & filters.ChatType.GROUPS
+            & filters.REPLY
+            & filters.Regex(r"(?i)^wrong$"),
+            handle_worker_wrong,
+        )
+    )
+
+    # Pricing by admins
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & filters.REPLY
+            & filters.User(user_id=admin_ids)
+            & filters.Regex(r"(?i)(\d[\d,]*)(\$|tm)"),
+            lambda u, c: handle_price(u, c, admin_ids),
+        )
+    )
+
+    # Cancel requests from customers
+    application.add_handler(
+        MessageHandler(filters.TEXT & filters.REPLY, handle_cancel_request)
+    )
+
+    # Core order intake
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_order))
+
+    application.add_handler(CallbackQueryHandler(handle_cancel_decision))
+
+    application.run_polling()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
