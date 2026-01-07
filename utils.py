@@ -4,6 +4,7 @@ from typing import Optional
 
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 NUMBER_REGEX = re.compile(r"\d[\d,]*")
+PRICE_REGEX = re.compile(r"(\d[\d,]*)(\$|tm)", re.IGNORECASE)
 
 
 def contains_email(text: str) -> bool:
@@ -45,7 +46,7 @@ def is_order_message(text: str) -> bool:
 
 
 def parse_price(text: str) -> Optional[tuple[float, str]]:
-    match = re.search(r"(\d[\d,]*)(\$|tm)", text, flags=re.IGNORECASE)
+    match = PRICE_REGEX.search(text)
     if not match:
         return None
     amount = float(match.group(1).replace(",", ""))

@@ -44,5 +44,8 @@ async def handle_export(update: Update, context: ContextTypes.DEFAULT_TYPE, admi
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         wb.save(tmp.name)
         file_path = tmp.name
-    await update.effective_message.reply_document(document=file_path, filename="orders.xlsx")
-    os.unlink(file_path)
+    try:
+        await update.effective_message.reply_document(document=file_path, filename="orders.xlsx")
+    finally:
+        if os.path.exists(file_path):
+            os.unlink(file_path)

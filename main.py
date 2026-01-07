@@ -56,10 +56,7 @@ async def addsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /addsource <type> <amount>")
         return
     order_type = args[0].lower()
-    try:
-        cp_amount = largest_number(args[1])
-    except Exception:
-        cp_amount = None
+    cp_amount = largest_number(args[1])
     if cp_amount is None:
         await update.message.reply_text("Amount missing or invalid.")
         return
