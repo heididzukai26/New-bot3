@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 def get_connection() -> sqlite3.Connection:
     db_path = os.getenv("DATABASE_PATH", "bot.db")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 

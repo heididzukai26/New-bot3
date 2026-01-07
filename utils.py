@@ -2,7 +2,9 @@ import re
 from typing import Optional
 
 
-EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+EMAIL_REGEX = re.compile(
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+)
 NUMBER_REGEX = re.compile(r"\d[\d,]*")
 PRICE_REGEX = re.compile(r"(\d[\d,]*)(\$|tm)", re.IGNORECASE)
 

@@ -3,6 +3,7 @@ from typing import Iterable, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ChatType
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 import db
@@ -17,7 +18,7 @@ async def _react_safe(bot, chat_id: int, message_id: int, reaction: str):
     try:
         if hasattr(bot, "set_message_reaction"):
             await bot.set_message_reaction(chat_id=chat_id, message_id=message_id, reaction=reaction)
-    except Exception as exc:  # pragma: no cover - best effort
+    except TelegramError as exc:  # pragma: no cover - best effort
         logging.warning("Failed to set reaction: %s", exc)
 
 
