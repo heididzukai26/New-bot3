@@ -79,7 +79,6 @@ def main():
         raise RuntimeError("BOT_TOKEN is required")
 
     admin_ids = load_admin_ids()
-    admin_id_list = list(admin_ids)
     application = (
         ApplicationBuilder().token(token).rate_limiter(AIORateLimiter()).build()
     )
@@ -115,7 +114,7 @@ def main():
         MessageHandler(
             filters.TEXT
             & filters.REPLY
-            & filters.User(user_id=admin_id_list)
+            & filters.User(user_id=admin_ids)
             & filters.Regex(r"(?i)(\d[\d,]*)(\$|tm)"),
             lambda u, c: handle_price(u, c, admin_ids),
         )

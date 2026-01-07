@@ -5,8 +5,8 @@ from typing import Optional
 EMAIL_REGEX = re.compile(
     r"^(?!.*\.\.)[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
 )
-NUMBER_REGEX = re.compile(r"\d{1,3}(?:,\d{3})*|\d+")
-PRICE_REGEX = re.compile(r"(\d{1,3}(?:,\d{3})*|\d+)(\$|tm)", re.IGNORECASE)
+NUMBER_REGEX = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)")
+PRICE_REGEX = re.compile(r"((?:\d{1,3}(?:,\d{3})+|\d+))(\$|tm)", re.IGNORECASE)
 
 
 def contains_email(text: str) -> bool:
