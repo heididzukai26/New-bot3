@@ -1,230 +1,309 @@
-import os
-import sqlite3
-import threading
-from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+import aiosqlite
+
+from typing import Optional
 
 
-DB_LOCK = threading.Lock()
-
-
-def get_connection() -> sqlite3.Connection:
-    db_path = os.getenv("DATABASE_PATH", "bot.db")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-@contextmanager
-def db_cursor():
-    with DB_LOCK:
-        conn = get_connection()
-        try:
-            cur = conn.cursor()
-            yield cur
-            conn.commit()
-        finally:
-            conn.close()
-
-
-def init_db():
-    with db_cursor() as cur:
-        cur.execute(
+async def init_db(db_path: str) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
             """
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_chat_id INTEGER,
-                customer_message_id INTEGER,
-                customer_name TEXT,
-                email TEXT,
-                order_text TEXT,
-                order_type TEXT,
-                cp_amount INTEGER,
-                routed_group_id INTEGER,
-                worker_chat_id INTEGER,
-                worker_message_id INTEGER,
-                status TEXT,
-                price_amount REAL,
-                price_currency TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                status TEXT NOT NULL,
+                type TEXT NOT NULL,
+                cp_pack INTEGER NOT NULL,
+                cp_qty INTEGER NOT NULL,
+                cp_total INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                password TEXT NOT NULL,
+                ign TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT,
+                completed_by INTEGER,
+                cancelled_by INTEGER,
+                rejected_by INTEGER
             )
             """
         )
-        cur.execute(
+        await db.execute(
             """
-            CREATE TABLE IF NOT EXISTS sources (
-                order_type TEXT,
-                cp_amount INTEGER,
-                chat_id INTEGER,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (order_type, cp_amount)
+            CREATE TABLE IF NOT EXISTS order_messages (
+                order_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                PRIMARY KEY (order_id, role),
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
             )
             """
         )
-        cur.execute(
+        await db.execute(
             """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
+            CREATE INDEX IF NOT EXISTS idx_order_messages_chat
+            ON order_messages(chat_id, message_id)
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                cp_pack INTEGER,
+                chat_id INTEGER NOT NULL,
+                UNIQUE (type, cp_pack)
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cancel_requests (
+                order_id INTEGER NOT NULL,
+                worker_chat_id INTEGER NOT NULL,
+                worker_message_id INTEGER NOT NULL,
+                request_message_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                decided_by INTEGER,
+                decided_at TEXT,
+                PRIMARY KEY (order_id),
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orders_status
+            ON orders(status)
+            """
+        )
+        await db.commit()
 
 
-def add_source(order_type: str, cp_amount: int, chat_id: int):
-    with db_cursor() as cur:
-        cur.execute(
+async def create_order(
+    db_path: str,
+    order_type: str,
+    cp_pack: int,
+    cp_qty: int,
+    cp_total: int,
+    email: str,
+    password: str,
+    ign: Optional[str],
+) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
             """
-            INSERT INTO sources(order_type, cp_amount, chat_id, updated_at)
-            VALUES(?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(order_type, cp_amount) DO UPDATE SET
+            INSERT INTO orders(
+                status,
+                type,
+                cp_pack,
+                cp_qty,
+                cp_total,
+                email,
+                password,
+                ign
+            ) VALUES('pending', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (order_type, cp_pack, cp_qty, cp_total, email, password, ign),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def set_order_message(
+    db_path: str, order_id: int, role: str, chat_id: int, message_id: int
+) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO order_messages(order_id, role, chat_id, message_id)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(order_id, role) DO UPDATE SET
                 chat_id=excluded.chat_id,
-                updated_at=excluded.updated_at
+                message_id=excluded.message_id
             """,
-            (order_type, cp_amount, chat_id),
+            (order_id, role, chat_id, message_id),
         )
+        await db.commit()
 
 
-def set_main(chat_id: int):
-    with db_cursor() as cur:
-        cur.execute(
+async def get_order_by_message(
+    db_path: str, chat_id: int, message_id: int
+) -> Optional[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
             """
-            INSERT INTO settings(key, value) VALUES('main_chat', ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            SELECT o.* FROM orders o
+            JOIN order_messages m ON o.id = m.order_id
+            WHERE m.chat_id=? AND m.message_id=?
             """,
-            (str(chat_id),),
+            (chat_id, message_id),
         )
+        return await cursor.fetchone()
 
 
-def get_main() -> Optional[int]:
-    with db_cursor() as cur:
-        cur.execute("SELECT value FROM settings WHERE key='main_chat'")
-        row = cur.fetchone()
-        return int(row["value"]) if row else None
-
-
-def list_sources() -> List[Tuple[str, int, int]]:
-    with db_cursor() as cur:
-        cur.execute("SELECT order_type, cp_amount, chat_id, updated_at FROM sources ORDER BY updated_at DESC")
-        return [(row["order_type"], row["cp_amount"], row["chat_id"]) for row in cur.fetchall()]
-
-
-def get_source(order_type: str, cp_amount: int) -> Optional[int]:
-    with db_cursor() as cur:
-        cur.execute(
-            "SELECT chat_id FROM sources WHERE order_type=? AND cp_amount=?",
-            (order_type, cp_amount),
+async def get_message_record(
+    db_path: str, chat_id: int, message_id: int
+) -> Optional[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM order_messages WHERE chat_id=? AND message_id=?",
+            (chat_id, message_id),
         )
-        row = cur.fetchone()
+        return await cursor.fetchone()
+
+
+async def get_message_record_for_role(
+    db_path: str, order_id: int, role: str
+) -> Optional[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM order_messages WHERE order_id=? AND role=?",
+            (order_id, role),
+        )
+        return await cursor.fetchone()
+
+
+async def get_order_messages(db_path: str, order_id: int) -> list[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM order_messages WHERE order_id=?",
+            (order_id,),
+        )
+        return await cursor.fetchall()
+
+
+async def get_order(db_path: str, order_id: int) -> Optional[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM orders WHERE id=?", (order_id,))
+        return await cursor.fetchone()
+
+
+async def update_order_status(
+    db_path: str,
+    order_id: int,
+    from_status: str,
+    to_status: str,
+    actor_field: Optional[str] = None,
+    actor_id: Optional[int] = None,
+    timestamp_field: Optional[str] = None,
+) -> bool:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        assignments = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: list[object] = [to_status]
+        if actor_field and actor_id is not None:
+            assignments.append(f"{actor_field} = ?")
+            values.append(actor_id)
+        if timestamp_field:
+            assignments.append(f"{timestamp_field} = CURRENT_TIMESTAMP")
+        values.extend([order_id, from_status])
+        cursor = await db.execute(
+            f"""
+            UPDATE orders
+            SET {", ".join(assignments)}
+            WHERE id = ? AND status = ?
+            """,
+            tuple(values),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def set_route(db_path: str, order_type: str, cp_pack: Optional[int], chat_id: int) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO routes(type, cp_pack, chat_id)
+            VALUES(?, ?, ?)
+            ON CONFLICT(type, cp_pack) DO UPDATE SET
+                chat_id=excluded.chat_id
+            """,
+            (order_type, cp_pack, chat_id),
+        )
+        await db.commit()
+
+
+async def get_route(db_path: str, order_type: str, cp_pack: int) -> Optional[int]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT chat_id FROM routes WHERE type=? AND cp_pack=?",
+            (order_type, cp_pack),
+        )
+        row = await cursor.fetchone()
         return row["chat_id"] if row else None
 
 
-def create_order(
-    customer_chat_id: int,
-    customer_message_id: int,
-    customer_name: str,
-    email: str,
-    order_text: str,
-    order_type: str,
-    cp_amount: int,
-    routed_group_id: Optional[int],
-) -> int:
-    with db_cursor() as cur:
-        cur.execute(
+async def get_main_route(db_path: str) -> Optional[int]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT chat_id FROM routes WHERE type='main' AND cp_pack IS NULL"
+        )
+        row = await cursor.fetchone()
+        return row["chat_id"] if row else None
+
+
+async def list_routes(db_path: str) -> list[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT type, cp_pack, chat_id FROM routes ORDER BY type, cp_pack"
+        )
+        return await cursor.fetchall()
+
+
+async def create_cancel_request(
+    db_path: str,
+    order_id: int,
+    worker_chat_id: int,
+    worker_message_id: int,
+    request_message_id: int,
+) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
             """
-            INSERT INTO orders(
-                customer_chat_id,
-                customer_message_id,
-                customer_name,
-                email,
-                order_text,
-                order_type,
-                cp_amount,
-                routed_group_id,
+            INSERT OR REPLACE INTO cancel_requests(
+                order_id,
+                worker_chat_id,
+                worker_message_id,
+                request_message_id,
                 status
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'routed')
+            ) VALUES(?, ?, ?, ?, 'pending')
             """,
-            (
-                customer_chat_id,
-                customer_message_id,
-                customer_name,
-                email,
-                order_text,
-                order_type,
-                cp_amount,
-                routed_group_id,
-            ),
+            (order_id, worker_chat_id, worker_message_id, request_message_id),
         )
-        return cur.lastrowid
+        await db.commit()
 
 
-def set_worker_message(order_id: int, chat_id: int, message_id: int):
-    with db_cursor() as cur:
-        cur.execute(
+async def get_cancel_request(db_path: str, order_id: int) -> Optional[aiosqlite.Row]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM cancel_requests WHERE order_id=?",
+            (order_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def update_cancel_request_status(
+    db_path: str, order_id: int, status: str, decided_by: Optional[int]
+) -> bool:
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
             """
-            UPDATE orders SET worker_chat_id=?, worker_message_id=? WHERE id=?
+            UPDATE cancel_requests
+            SET status=?, decided_by=?, decided_at=CURRENT_TIMESTAMP
+            WHERE order_id=? AND status='pending'
             """,
-            (chat_id, message_id, order_id),
+            (status, decided_by, order_id),
         )
-
-
-def update_status(order_id: int, status: str):
-    with db_cursor() as cur:
-        cur.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
-
-
-def set_price(order_id: int, amount: float, currency: str):
-    with db_cursor() as cur:
-        cur.execute(
-            "UPDATE orders SET price_amount=?, price_currency=? WHERE id=?",
-            (amount, currency, order_id),
-        )
-
-
-def get_order_by_worker_message(chat_id: int, message_id: int) -> Optional[sqlite3.Row]:
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT * FROM orders WHERE worker_chat_id=? AND worker_message_id=?
-            """,
-            (chat_id, message_id),
-        )
-        return cur.fetchone()
-
-
-def get_order_by_customer_message(chat_id: int, message_id: int) -> Optional[sqlite3.Row]:
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT * FROM orders WHERE customer_chat_id=? AND customer_message_id=?
-            """,
-            (chat_id, message_id),
-        )
-        return cur.fetchone()
-
-
-def get_order(order_id: int) -> Optional[sqlite3.Row]:
-    with db_cursor() as cur:
-        cur.execute("SELECT * FROM orders WHERE id=?", (order_id,))
-        return cur.fetchone()
-
-
-def all_orders() -> List[Dict[str, Any]]:
-    with db_cursor() as cur:
-        cur.execute(
-            "SELECT id, email, order_type, cp_amount, status, price_amount, price_currency, created_at, customer_name FROM orders ORDER BY id ASC"
-        )
-        return [dict(row) for row in cur.fetchall()]
-
-
-def totals_by_currency() -> Dict[str, float]:
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT price_currency, SUM(price_amount) as total
-            FROM orders
-            WHERE price_amount IS NOT NULL
-            GROUP BY price_currency
-            """
-        )
-        return {row["price_currency"]: row["total"] for row in cur.fetchall()}
+        await db.commit()
+        return cursor.rowcount == 1
